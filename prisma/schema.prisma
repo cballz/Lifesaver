@@ -1,0 +1,423 @@
+// LifeSaver ERN Emergency Response Network Database Schema
+
+generator client {
+    provider = "prisma-client-js"
+    binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
+    output = "/home/ubuntu/lifesaver_ern/app/node_modules/.prisma/client"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+// Core User Management
+model User {
+  id                    String   @id @default(cuid())
+  email                 String   @unique
+  name                  String?
+  password              String
+  firstName             String
+  lastName              String
+  phone                 String?
+  zipCode               String
+  emergencyContact      String?
+  emergencyContactPhone String?
+  profilePicture        String?
+  isActive              Boolean  @default(true)
+  role                  UserRole @default(USER)
+  consentToShare        Boolean  @default(false)
+  consentDate           DateTime?
+  narcanTrained         Boolean  @default(false)
+  trainingExpiresAt     DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  // Relationships
+  aiAgent           AIAgent?
+  biometricProfile  BiometricProfile?
+  responderNetworks ResponderNetwork[] @relation("UserResponders")
+  responderFor      ResponderNetwork[] @relation("ResponderUser")
+  emergenciesAsUser Emergency[]        @relation("EmergencyUser")
+  responsesToEmergencies EmergencyResponse[]
+  socialPosts       SocialPost[]
+  treeOfLifeEntries TreeOfLifeEntry[]
+  sentAlerts        Alert[]            @relation("AlertSender")
+  receivedAlerts    Alert[]            @relation("AlertReceiver")
+  sessions          Session[]
+  accounts          Account[]
+  trainingCompletions TrainingCompletion[]
+  postComments      PostComment[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// AI Agent System
+model AIAgent {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  name            String
+  personalityType String    @default("supportive")
+  lastActiveAt    DateTime  @default(now())
+  isOnline        Boolean   @default(true)
+  configData      Json?     // Store AI configuration
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatSessions  AIChatSession[]
+  checkIns      AICheckIn[]
+
+  @@map("ai_agents")
+}
+
+model AIChatSession {
+  id         String          @id @default(cuid())
+  agentId    String
+  sessionType ChatSessionType @default(GENERAL)
+  isActive   Boolean         @default(true)
+  startedAt  DateTime        @default(now())
+  endedAt    DateTime?
+
+  agent    AIAgent      @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@map("ai_chat_sessions")
+}
+
+model ChatMessage {
+  id          String   @id @default(cuid())
+  sessionId   String
+  role        String   // 'user' or 'assistant'
+  content     String   @db.Text
+  metadata    Json?    // Store additional message data
+  timestamp   DateTime @default(now())
+
+  session AIChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("chat_messages")
+}
+
+// Biometric Monitoring
+model BiometricProfile {
+  id                    String  @id @default(cuid())
+  userId                String  @unique
+  heartRateMin          Int     @default(60)
+  heartRateMax          Int     @default(100)
+  respiratoryRateMin    Int     @default(12)
+  respiratoryRateMax    Int     @default(20)
+  bloodOxygenMin        Float   @default(95.0)
+  motionThreshold       Float   @default(0.5)
+  isMonitoringEnabled   Boolean @default(true)
+  wearableConnected     Boolean @default(false)
+  wearableType          String?
+  lastCalibrated        DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  biometricData    BiometricData[]
+  checkIns         AICheckIn[]
+
+  @@map("biometric_profiles")
+}
+
+model BiometricData {
+  id              String   @id @default(cuid())
+  profileId       String
+  heartRate       Int?
+  respiratoryRate Int?
+  bloodOxygen     Float?
+  motionLevel     Float?
+  timestamp       DateTime @default(now())
+  source          String   @default("simulated") // 'wearable' or 'simulated'
+  alertTriggered  Boolean  @default(false)
+
+  profile BiometricProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, timestamp])
+  @@map("biometric_data")
+}
+
+// Alert and Emergency System
+model AICheckIn {
+  id                String      @id @default(cuid())
+  agentId           String
+  biometricProfileId String?
+  triggerReason     String
+  checkInType       CheckInType @default(ROUTINE)
+  status            String      @default("pending") // 'pending', 'responded', 'escalated'
+  userResponse      String?
+  responseTime      Int?        // seconds to respond
+  escalated         Boolean     @default(false)
+  escalatedAt       DateTime?
+  createdAt         DateTime    @default(now())
+
+  agent            AIAgent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  biometricProfile BiometricProfile? @relation(fields: [biometricProfileId], references: [id])
+  emergency        Emergency?
+
+  @@map("ai_check_ins")
+}
+
+model Emergency {
+  id            String         @id @default(cuid())
+  userId        String
+  checkInId     String?        @unique
+  alertLevel    AlertLevel     @default(YELLOW)
+  status        EmergencyStatus @default(ACTIVE)
+  location      String?        // JSON string with lat/lng
+  address       String?
+  description   String?
+  resolvedAt    DateTime?
+  resolvedBy    String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  user             User                @relation("EmergencyUser", fields: [userId], references: [id])
+  checkIn          AICheckIn?          @relation(fields: [checkInId], references: [id])
+  alerts           Alert[]
+  responses        EmergencyResponse[]
+  coordinationLogs EmergencyLog[]
+
+  @@map("emergencies")
+}
+
+model Alert {
+  id           String      @id @default(cuid())
+  emergencyId  String
+  senderId     String
+  receiverId   String
+  alertType    String      // 'SMS', 'EMAIL', 'PUSH'
+  message      String      @db.Text
+  status       AlertStatus @default(PENDING)
+  sentAt       DateTime?
+  acknowledgedAt DateTime?
+  retryCount   Int         @default(0)
+  createdAt    DateTime    @default(now())
+
+  emergency Emergency @relation(fields: [emergencyId], references: [id], onDelete: Cascade)
+  sender    User      @relation("AlertSender", fields: [senderId], references: [id])
+  receiver  User      @relation("AlertReceiver", fields: [receiverId], references: [id])
+
+  @@map("alerts")
+}
+
+model EmergencyResponse {
+  id                String   @id @default(cuid())
+  emergencyId       String
+  responderId       String
+  status            String   @default("notified") // 'notified', 'acknowledged', 'en_route', 'arrived', 'completed'
+  estimatedArrival  DateTime?
+  actualArrival     DateTime?
+  notes             String?
+  hasNarcan         Boolean  @default(false)
+  acknowledgedAt    DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  emergency Emergency @relation(fields: [emergencyId], references: [id], onDelete: Cascade)
+  responder User      @relation(fields: [responderId], references: [id])
+
+  @@map("emergency_responses")
+}
+
+model EmergencyLog {
+  id          String   @id @default(cuid())
+  emergencyId String
+  action      String
+  details     String?  @db.Text
+  performedBy String?
+  timestamp   DateTime @default(now())
+
+  emergency Emergency @relation(fields: [emergencyId], references: [id], onDelete: Cascade)
+
+  @@map("emergency_logs")
+}
+
+// Responder Network System
+model ResponderNetwork {
+  id            String   @id @default(cuid())
+  userId        String   // The user who needs help
+  responderId   String   // The responder
+  relationship  String   // 'family', 'friend', 'neighbor', 'volunteer'
+  priority      Int      @default(1) // 1 = highest priority
+  distance      Float?   // miles away
+  isActive      Boolean  @default(true)
+  lastContacted DateTime?
+  responseRate  Float    @default(0.0) // percentage of times responded
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user      User @relation("UserResponders", fields: [userId], references: [id], onDelete: Cascade)
+  responder User @relation("ResponderUser", fields: [responderId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, responderId])
+  @@map("responder_networks")
+}
+
+// Training and Certification
+model TrainingModule {
+  id           String   @id @default(cuid())
+  name         String
+  description  String   @db.Text
+  content      Json     // Training content and questions
+  passingScore Int      @default(80)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  completions TrainingCompletion[]
+
+  @@map("training_modules")
+}
+
+model TrainingCompletion {
+  id         String   @id @default(cuid())
+  userId     String
+  moduleId   String
+  score      Int
+  passed     Boolean
+  completedAt DateTime @default(now())
+  expiresAt  DateTime?
+  certificateUrl String?
+
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  module TrainingModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, moduleId])
+  @@map("training_completions")
+}
+
+// Social Network and Tree of Life
+model SocialPost {
+  id          String     @id @default(cuid())
+  userId      String
+  content     String     @db.Text
+  postType    PostType   @default(STORY)
+  isAnonymous Boolean    @default(false)
+  isPublic    Boolean    @default(true)
+  sobrietyDate DateTime?
+  milestones  Json?      // Array of milestone objects
+  likes       Int        @default(0)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  comments PostComment[]
+
+  @@map("social_posts")
+}
+
+model PostComment {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+
+  post SocialPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("post_comments")
+}
+
+model TreeOfLifeEntry {
+  id            String   @id @default(cuid())
+  userId        String
+  entryType     String   // 'milestone', 'reflection', 'goal'
+  title         String
+  description   String   @db.Text
+  dateAchieved  DateTime?
+  sobrietyDays  Int?
+  isPublic      Boolean  @default(false)
+  color         String   @default("blue")
+  position      Json?    // x,y coordinates for tree visualization
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("tree_of_life_entries")
+}
+
+// Enums
+enum UserRole {
+  USER
+  RESPONDER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum ChatSessionType {
+  GENERAL
+  PRE_USE_ALERT
+  CHECK_IN
+  EMERGENCY
+  TRAINING
+}
+
+enum CheckInType {
+  ROUTINE
+  BIOMETRIC_TRIGGER
+  MISSED_CHECKIN
+  PRE_USE_ALERT
+  MANUAL
+}
+
+enum AlertLevel {
+  GREEN
+  YELLOW
+  RED
+}
+
+enum EmergencyStatus {
+  ACTIVE
+  RESPONDING
+  RESOLVED
+  FALSE_ALARM
+}
+
+enum AlertStatus {
+  PENDING
+  SENT
+  DELIVERED
+  ACKNOWLEDGED
+  FAILED
+}
+
+enum PostType {
+  STORY
+  MILESTONE
+  SUPPORT_REQUEST
+  ENCOURAGEMENT
+}
